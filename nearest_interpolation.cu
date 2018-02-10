@@ -20,35 +20,40 @@ using namespace std;
 using namespace cv;
 using namespace gpu;
 
-// 宏定义 Block的尺寸为 16*16
-#define DEF_BLOCK_X  16
-#define DEF_BLOCK_Y  16
+// 宏定义 Block的尺寸为 16*2
+//#define DEF_BLOCK_X  16
+//#define DEF_BLOCK_Y  2
 
 
-// in为原始图像； out为缩放后空白图； scale为缩放比例
-int NearestInterpolation(Mat &in, Mat &out, float scale)
+// src_cpu_data原图像指针；out_cpu_data扩充后图像指针；scale扩充倍数
+int NearestInterpolation(uchar* &src_cpu_data, uchar* &out_cpu_data, float scale,int rows,int cols,int channels,int out_rows,int out_cols)
 {
-	float f_in_row;
-	float in_row;
+	float f_src_row;
+	int   i_src_row;
 
-	float f_in_col;  //原图横坐标float型
-	float in_col;    //原图横坐标int型
+	float f_src_col;    //原图横坐标float型
+	int   i_src_col;    //原图横坐标int型
 
-	for (int r = 0; r < out.rows; r++)   //height
+	for (int y = 0; y < out_rows; y++)   
 	{
-		for (int c = 0; c < out.cols; c++)  //width
+		for (int x = 0; x < out_cols ; x++)
 		{
-			f_in_row = r / scale;
-			in_row = (int)f_in_row;
-			if ((f_in_row - in_row) > 0.5 && in_row < (in.rows - 1))    //in.rows - 1 只是为了防止超出边框
-				in_row++;
+			int a = 0, b = 0;
+			f_src_row = y / scale;
+			i_src_row = (int)f_src_row;
+			
+			f_src_col = x / scale;
+			i_src_col = (int)f_src_col;			
+			
+			if ((f_src_row - i_src_row) >= 0.5 && i_src_row <(rows - 1) )    //i_out_row <(rows - 1)只是为了防止超出边框
+				a=1;
 
-			f_in_col = c / scale;
-			in_col = (int)f_in_col;
-			if ((f_in_col - in_col) > 0.5 && in_col < (in.cols - 1))
-				in_col++;
+			if ((f_src_col - i_src_col) >= 0.5 && i_src_col < (cols - 1))
+				b=1;
 
-			out.at<Vec3b>(r, c) = in.at<Vec3b>(in_row, in_col);
+			*(out_cpu_data + 3 * x + y*out_cols*channels) = *(src_cpu_data + 3 * (i_src_col + a) + (i_src_row + b)*cols*channels);
+			*(out_cpu_data + 3 * x + y*out_cols*channels+1) = *(src_cpu_data + 3 * (i_src_col + a) + (i_src_row + b)*cols*channels+1);
+			*(out_cpu_data + 3 * x + y*out_cols*channels+2) = *(src_cpu_data + 3 * (i_src_col + a) + (i_src_row + b)*cols*channels+2);
 		}
 	}
 	return 0;
@@ -56,79 +61,44 @@ int NearestInterpolation(Mat &in, Mat &out, float scale)
 
 
 template <int nthreads>
-__global__ void NI_kernel(int out_height, int out_width, const PtrStepb src,  PtrStepb out,float scale)
+__global__ void NI_kernel(uchar* &src_gpu_data, uchar* &out_gpu_data, float scale, int rows, int cols, int channels, int out_rows, int out_cols)
 {
-
 	const int x = blockIdx.x * blockDim.x + threadIdx.x;  //x
-	const int y = blockIdx.y * blockDim.y + threadIdx.y;  //y
-	
-	const uchar* src_y = (const uchar*)(src);
-	uchar* out_y = (uchar*)(out);
+	const int y = blockIdx.y * blockDim.y + threadIdx.y;  //y	
 
-	float src_x_f;
-	int   src_x_i;
-	float src_x_cha;
+	printf("1");
+	float f_src_col;
+	int   i_src_col;
+	float cha_col;
 
-	float src_y_f;
-	int   src_y_i;
-	float src_y_cha;
+	float f_src_row;
+	int   i_src_row;
+	float cha_row;
 
-	int a=0;
-	int b=0;
+	int a = 0, b = 0;
 
+	f_src_col = x / scale;
+	f_src_row = y / scale;
+	i_src_col = (int)f_src_col;
+	i_src_row = (int)f_src_row;
+	cha_col   = f_src_col - i_src_col;
+	cha_row   = f_src_row - i_src_row;
 
-	src_x_f = x / scale;
-	src_y_f = y / scale;
-	src_x_i = (int)src_x_f;
-	src_y_i = (int)src_y_f;
-	src_x_cha = src_x_f - src_x_i;
-	src_y_cha = src_y_f - src_y_i;
-
-
-
-/*------------第一个版本-----------
-	if (x < out_width && y < out_height)   //减少判断次数，三行赋值合并成一行；  一个线程处理4个像素点
-	{
-		if (src_x_cha<0.5 && src_y_cha<0.5)
-		{
-			out_y[3 * x + y*out.step] = src_y[3 * src_x_i + src_y_i*src.step];
-			out_y[3 * x + y*out.step + 1] = src_y[3 * src_x_i + src_y_i*src.step + 1];
-			out_y[3 * x + y*out.step + 2] = src_y[3 * src_x_i + src_y_i*src.step + 2];
-		}
-		if (src_x_cha>=0.5 && src_y_cha>=0.5)
-		{
-			out_y[3 * x + y*out.step] = src_y[3 * src_x_i + 3 + (src_y_i + 1)*src.step];
-			out_y[3 * x + y*out.step + 1] = src_y[3 * src_x_i + (src_y_i + 1)*src.step + 1];
-			out_y[3 * x + y*out.step + 2] = src_y[3 * src_x_i + (src_y_i + 1)*src.step + 2];
-		}
-		if (src_x_cha >= 0.5 && src_y_cha < 0.5)
-		{
-			out_y[3 * x + y*out.step] = src_y[3 * src_x_i + 3 + src_y_i*src.step];
-			out_y[3 * x + y*out.step + 1] = src_y[3 * src_x_i + 3 + src_y_i*src.step + 1];
-			out_y[3 * x + y*out.step + 2] = src_y[3 * src_x_i + 3 + src_y_i*src.step + 2];
-		}
-		if (src_x_cha < 0.5 && src_y_cha >= 0.5)
-		{
-			out_y[3 * x + y*out.step] = src_y[3 * src_x_i + (src_y_i+1)*src.step];
-			out_y[3 * x + y*out.step + 1] = src_y[3 * src_x_i + (src_y_i + 1)*src.step + 1];
-			out_y[3 * x + y*out.step + 2] = src_y[3 * src_x_i + (src_y_i + 1)*src.step + 2];
-		}
-	}
-*/
-
-//-----------第二个版本----------
+//-----------新版本----------
 //旧版本每一个线程需要需要比较4次，新版本每个线程只需要比较2次。
 //旧版本赋值过程太繁琐，已简化为三行。
+//旧版本使用了GpuMat，本版本使用指针进行传入，避免了黑盒调试
 
-	if (x < out_width && y < out_height)
-	{
-		if (src_x_cha >= 0.5)  a++;
-		if (src_y_cha >= 0.5)  b++;
-		out_y[3 * x + y*out.step] = src_y[3 * src_x_i + 3 * a + (src_y_i + b) * src.step];
-		out_y[3 * x + y*out.step + 1] = src_y[3 * src_x_i + 3 * a + (src_y_i + b)*src.step + 1];
-		out_y[3 * x + y*out.step + 2] = src_y[3 * src_x_i + 3 * a + (src_y_i + b)*src.step + 2];			
-	}
-		
+	if (cha_col >= 0.5)  a++;
+	if (cha_row >= 0.5)  b++;
+	*(out_gpu_data + x + y*out_cols*channels) = *(src_gpu_data + (i_src_col + a) + (i_src_row + b)*cols*channels);
+	
+
+
+//	*(out_gpu_data + 3 * x + y*out_cols*channels) = *(src_gpu_data + 3 * (i_src_col + a) + (i_src_row + b)*cols*channels);
+//	*(out_gpu_data + 3 * x + y*out_cols*channels + 1) = *(src_gpu_data + 3 * (i_src_col + a) + (i_src_row + b)*cols*channels + 1);
+//	*(out_gpu_data + 3 * x + y*out_cols*channels + 2) = *(src_gpu_data + 3 * (i_src_col + a) + (i_src_row + b)*cols*channels + 2);
+	
 }
 
 
@@ -136,90 +106,65 @@ __global__ void NI_kernel(int out_height, int out_width, const PtrStepb src,  Pt
 int main()
 {
 	float scale = 0.6f;   
-	int i;
-
 	char* src_path = "teddy.bmp";  
 
-/*--------------------CPU图像处理初始化-----------------------------*/
-	Mat src = cv::imread(src_path, CV_LOAD_IMAGE_COLOR);   //src为原图
-	imshow("原始图像", src);
+//	Mat src = cv::imread(src_path, CV_LOAD_IMAGE_COLOR);   //src为原图
+	Mat src = cv::imread(src_path, 0);   //src为原图
 
-	int out_rows = src.rows*scale;    //变换后图像高度rows(height)
-	int out_cols = src.cols*scale;    //变换后图像宽度cols(width)
+	cv::imshow("原始图像", src);
+
+	int rows = src.rows;              //原始图像的高度rows
+	int cols = src.cols;              //原始图像的宽度cols
+	int channels = src.channels();    //原始图像的通道数channels
+	int out_rows = src.rows*scale;    //变换后图像高度rows
+	int out_cols = src.cols*scale;    //变换后图像宽度cols
+
+/*-------------------------------CPU图像处理-----------------------------*/
+	Mat out(out_rows, out_cols, CV_8UC1);  //要输出的图像
+
+	uchar *src_cpu_data = src.ptr<uchar>(0);   //指向了src第一行第一个元素
+	uchar *out_cpu_data = out.ptr<uchar>(0);   //指向了out第一行第一个元素
 	
-	Mat out(out_rows, out_cols, CV_8UC3);
-
-/*------------------------CPU图像处理--------------------------------*/
 	LARGE_INTEGER cpu_t1, cpu_t2, cpu_tc;
 	QueryPerformanceFrequency(&cpu_tc);
 	QueryPerformanceCounter(&cpu_t1);
 	
-	for (i = 0; i < 100; i++)
+	for (int time = 0; time < 100; time++)         //运行100次，取平均值
 	{
-		NearestInterpolation(src, out, scale);
+//		NearestInterpolation(src_cpu_data, out_cpu_data, scale,rows,cols,channels,out_rows,out_cols);
 	}
 	
 	QueryPerformanceCounter(&cpu_t2);
-	cout << "使用CPU做最邻近插值法的时间：" << (cpu_t2.QuadPart - cpu_t1.QuadPart) * 1.0 * 1000 / cpu_tc.QuadPart /100 << "ms" << endl;
-
-
-/*----------------------GPU图像处理初始化-------------------------
-	Image *cpu_src;
-	ImageCuda gpu_out;
-	int errcode;
-
-	ImageCuda ;
-	errcode = ImageBasicOp::roiSubImage(inimg, &insubimgCud);
-	if (errcode != NO_ERROR)
-		return errcode;
-
-	// 根据子图像的大小对长，宽进行调整，选择长度小的长，宽进行子图像的统一	
-	if (insubimgCud.imgMeta.width > outsubimgCud.imgMeta.width)
-		insubimgCud.imgMeta.width = outsubimgCud.imgMeta.width;
-	else
-		outsubimgCud.imgMeta.width = insubimgCud.imgMeta.width;
-
-	if (insubimgCud.imgMeta.height > outsubimgCud.imgMeta.height)
-		insubimgCud.imgMeta.height = outsubimgCud.imgMeta.height;
-	else
-		outsubimgCud.imgMeta.height = insubimgCud.imgMeta.height;
-		*/
+	std::cout << "使用CPU做最邻近插值法的时间：" << (cpu_t2.QuadPart - cpu_t1.QuadPart) * 1.0 * 1000 / cpu_tc.QuadPart /100 << "ms" << endl;
 
 
 
+/*----------------------GPU图像处理-------------------------*/
+	Mat gpu_out(out_rows, out_cols, CV_8UC3);
+	uchar *src_gpu_data = src.ptr<uchar>(0);       //指向读入进来的原始图像
+	uchar *out_gpu_data = gpu_out.ptr<uchar>(0);   //指向新生成的GPU型
 
+	const int nthreads = 256;
+	dim3 bdim(nthreads, 1);
+	dim3 gdim(divUp(out.cols, bdim.x), divUp(out.rows, bdim.y));
 
-//	const int nthreads = 256;
-//	dim3 bdim(nthreads, 1);
-//	dim3 gdim(divUp(out.cols, bdim.x), divUp(out.rows, bdim.y));
-
-
-
-/*------------------------GPU图像处理------------------------------	
 	LARGE_INTEGER gpu_t1, gpu_t2, gpu_tc;
 	QueryPerformanceFrequency(&gpu_tc);
 	QueryPerformanceCounter(&gpu_t1);
-
-	for (i = 0; i < 100; i++)
-	{
-		NI_kernel<nthreads> << <gdim, bdim >> > (out_rows, out_cols, d_src, d_out, scale);
+//	for (int time = 0; time < 100; time++)
+//	{
+		NI_kernel<nthreads> << <gdim, bdim >> > (src_gpu_data, out_gpu_data, scale, rows, cols, channels, out_rows, out_cols);
 		cudaDeviceSynchronize();
-	}
-
+//	}
 	QueryPerformanceCounter(&gpu_t2);
 	cout << "使用GPU做最邻近插值法的时间：" << (gpu_t2.QuadPart - gpu_t1.QuadPart) * 1.0 * 1000 / gpu_tc.QuadPart / 100 << "ms" << endl;
-	*/
 
 
 
 
+	cv::imshow("GPU处理后图像", gpu_out);//GPU的结果进行输出
+	cv::imshow("CPU处理后图像", out);
 
-
-
-
-//	imshow("GPU处理后图像", image);//GPU的结果进行输出
-	imshow("CPU处理后图像", out);
-
-	waitKey(0);
+	cv::waitKey(0);
 	return 0;
 }
