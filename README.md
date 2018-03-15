@@ -4,7 +4,7 @@ CUDA/GPU
 项目使用的软硬件如下：            
     Win10，GTX 1080;                                      
     CUDA8.0，OpenCV2.4.13，Visual Studio 2015；                                                                            
-本项目主要有以下几个部分(每个程序都有CPU和GPU版本）： 
+本项目主要有以下几个部分(每个程序都有CPU和GPU版本）：                        
 1.nearest_interpolation.cu                                      
     该部分为原始图像使用最邻近插值对图像进行处理，算法详细内容请看【重采样算法说明.docx】。                                      
 2.Bilinear_Interpolation.cu                                      
