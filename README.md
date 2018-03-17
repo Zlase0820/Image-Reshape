@@ -20,4 +20,6 @@ CUDA/GPU
 7.return.cu                                  
     附加算法，将处理后的图像对应到原来的像素点上，算法详细内容请看【重采样算法说明.docx】。                           
 8.run.bat                           
-    windows下的指令，用来测试程序，测试的GPU加速效果存放在data.xlsx中。                               
+    windows下的指令，用来测试程序，测试的GPU加速效果存放在data.xlsx中。                           
+    
+后边出现_one的.cu则是对应该算法的单通道处理算法。
